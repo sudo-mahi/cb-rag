@@ -827,6 +827,7 @@ Chronological record of decisions made and why, for future-you to audit.
 | 35 | Each Chroma collection records `embedding_model` in its metadata. Indexing with a different model drops and rebuilds the collection; searching it raises `EmbeddingModelMismatch` ("re-index") | No check | Vectors from different models aren't comparable, and mixing them fails silently with meaningless scores |
 | 36 | `/ask` memory/latency fixes: system prompt says cite `path:lines` and quote only a few lines (never whole functions); `ASK_NUM_CTX` 16384 → 8192; `fit_to_context` drops lowest-scoring chunks until the prompt fits (est. chars/3), before the `sources` event, which now carries `dropped` | Smaller answer model (3b); leave as is | A ~4K-token question took 41 min: 16K context + both models + desktop apps pushed a 16 GB Mac into swap, and the model pasted whole functions. Trimming is required once the window is smaller, since Ollama cuts the prompt's start |
 | 37 | Phase 2 `/complete` model: local `qwen2.5-coder:1.5b` via Ollama with fill-in-the-middle (prefix + suffix), replacing Claude Haiku in Section 12; measure latency before building on it. CLI built before Phase 2 starts | Reuse the 7B; cloud Claude Haiku 5.5 | Free and private like the rest; FIM context matters more for completions than size. 7B is ~2s+ per suggestion, too slow for ghost text (Section 12's 300-500ms budget) |
+| 38 | CLI: command `ragx` (`index`, `ask`, `q`, `repos`), a thin HTTP client in `cli/main.py`. Repo = `--repo`, else the deepest registered repo containing the current folder, else an error. Daemon down → error printing the exact start command. Installed with `uv tool install --editable . --python 3.14` | Names `cbrag` / `cb`; always `--repo`; CLI auto-starts the daemon | `ragx` was already used throughout the docs. Folder inference matches working inside a repo. Auto-start brings log files, a stop command, and stale-code daemons; a login service (launchd) is the deferred alternative. Python pinned because uv defaults to 3.15, which `onnxruntime` (via chromadb) has no wheels for |
 
 ---
 
@@ -881,3 +882,5 @@ Chronological record of decisions made and why, for future-you to audit.
   722 chunks, indexed in 78s) exposed a 41-minute `/ask` under memory
   pressure; fixed with #36. Phase 2 completion model chosen (#37), CLI to
   be built first. Phase 1 pushed on branch `phase-1`.
+- **2026-11-14** — CLI `ragx` (#38). **Phase 1 complete:** index, search,
+  and streamed answers work end to end from any folder, fully local.
