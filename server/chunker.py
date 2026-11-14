@@ -7,9 +7,12 @@ Design decisions this file implements (see design doc):
   so reordering functions doesn't cause spurious re-embeds
 - Section 9: per-chunk content hash, stored as metadata, so only genuinely
   changed functions get re-embedded
+- Decision #39: docs and infra/config files (no AST) are chunked as text —
+  whole if small, Markdown by heading, others by line windows
 """
 
 import hashlib
+import re
 from pathlib import Path
 from tree_sitter_language_pack import get_parser
 
@@ -19,7 +22,21 @@ from server.config import (
     IMPORT_NODE_TYPES,
     FILE_FALLBACK_MAX_CHARS,
     FILE_DESCRIPTION_MAX_CHARS,
+    TEXT_FILE_TYPES,
+    TEXT_FILE_PREFIXES,
+    TEXT_WINDOW_LINES,
 )
+
+_MD_HEADING = re.compile(r"^#{1,3}\s+(.+)")
+_MD_FENCE = re.compile(r"^\s*(```|~~~)")
+
+
+def text_lang(filename: str) -> str | None:
+    """Fence language if this is an indexable non-code text file, else None."""
+    for prefix, lang in TEXT_FILE_PREFIXES.items():
+        if filename.startswith(prefix):
+            return lang
+    return TEXT_FILE_TYPES.get(Path(filename).suffix)
 
 
 def _hash_text(text: str) -> str:
@@ -139,6 +156,8 @@ def chunk_file(filepath: str, rel_path: str | None = None) -> list[dict]:
     ext = path.suffix
     language = LANG_MAP.get(ext)
     if language is None:
+        if text_lang(path.name):
+            return _dedupe_ids(_chunk_text_file(path, id_prefix))
         return []  # unsupported file type — caller should have filtered already
 
     try:
@@ -179,10 +198,21 @@ def chunk_file(filepath: str, rel_path: str | None = None) -> list[dict]:
             walk(child, current_class)
 
     walk(tree.root_node, enclosing_class=None)
+    _dedupe_ids(chunks)
 
-    # Section 9: rare true name collisions (e.g. dynamically generated
-    # duplicate names) — append an occurrence index as a last resort so
-    # every chunk_id in the returned list is guaranteed unique.
+    file_chunk = _file_chunk(tree.root_node, source_bytes, id_prefix, chunks)
+    if file_chunk:
+        chunks.append(file_chunk)
+
+    return chunks
+
+
+def _dedupe_ids(chunks: list[dict]) -> list[dict]:
+    """
+    Section 9: rare true name collisions (duplicate function names, repeated
+    Markdown headings) — append an occurrence index as a last resort so
+    every chunk_id is unique.
+    """
     seen_ids: dict[str, int] = {}
     for chunk in chunks:
         base_id = chunk["chunk_id"]
@@ -191,9 +221,78 @@ def chunk_file(filepath: str, rel_path: str | None = None) -> list[dict]:
             chunk["chunk_id"] = f"{base_id}:{seen_ids[base_id]}"
         else:
             seen_ids[base_id] = 0
-
-    file_chunk = _file_chunk(tree.root_node, source_bytes, id_prefix, chunks)
-    if file_chunk:
-        chunks.append(file_chunk)
-
     return chunks
+
+
+def _text_chunk(chunk_id: str, text: str, start: int, end: int, level: str, kind: str = "code") -> dict:
+    return {
+        "chunk_id": chunk_id,
+        "text": text,
+        "content_hash": _hash_text(text),
+        "start_line": start,
+        "end_line": end,
+        "node_type": "text",
+        "level": level,
+        "kind": kind,
+    }
+
+
+def _markdown_sections(lines: list[str]) -> list[tuple[str, int, int]]:
+    """
+    (name, start_idx, end_idx) per #/##/### section. Lines inside fenced
+    code blocks never start a section (a `# comment` in a shell example
+    isn't a heading). Text before the first heading becomes "#(intro)".
+    """
+    starts: list[tuple[str, int]] = []
+    in_fence = False
+    for i, line in enumerate(lines):
+        if _MD_FENCE.match(line):
+            in_fence = not in_fence
+        elif not in_fence and (m := _MD_HEADING.match(line)):
+            starts.append(("#" + m.group(1).strip(), i))
+
+    if not starts or starts[0][1] > 0:
+        starts.insert(0, ("#(intro)", 0))
+    bounds = [s for _, s in starts[1:]] + [len(lines)]
+    return [
+        (name, s, e) for (name, s), e in zip(starts, bounds)
+        if "".join(lines[s:e]).strip()
+    ]
+
+
+def _chunk_text_file(path: Path, id_prefix: str) -> list[dict]:
+    """
+    Decision #39:
+    - small file -> one file-level chunk with its full text
+    - large Markdown -> one detail chunk per section, plus a file-level
+      outline (the headings) as the file's summary
+    - large other text -> detail chunks of TEXT_WINDOW_LINES lines; ids use
+      line ranges, so an insertion re-embeds later windows (cheap locally)
+    """
+    source = path.read_text(encoding="utf-8")
+    if not source.strip():
+        return []
+    lines = source.splitlines(keepends=True)
+
+    if len(source) <= FILE_FALLBACK_MAX_CHARS:
+        return [_text_chunk(f"{id_prefix}:<file>", source, 1, len(lines), "file")]
+
+    if path.suffix == ".md":
+        sections = _markdown_sections(lines)
+        chunks = [
+            _text_chunk(f"{id_prefix}:{name}", "".join(lines[s:e]), s + 1, e, "function")
+            for name, s, e in sections
+        ]
+        outline = [lines[s].rstrip() for name, s, _ in sections if name != "#(intro)"]
+        summary = f"File: {id_prefix}\nSections:\n" + "\n".join(f"  {h}" for h in outline)
+        chunks.append(_text_chunk(f"{id_prefix}:<file>", summary, 1, len(lines), "file", kind="summary"))
+        return chunks
+
+    return [
+        _text_chunk(
+            f"{id_prefix}:L{s + 1}-{min(s + TEXT_WINDOW_LINES, len(lines))}",
+            "".join(lines[s:s + TEXT_WINDOW_LINES]),
+            s + 1, min(s + TEXT_WINDOW_LINES, len(lines)), "function",
+        )
+        for s in range(0, len(lines), TEXT_WINDOW_LINES)
+    ]

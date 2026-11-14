@@ -77,6 +77,19 @@ CHUNKABLE_NODE_TYPES = {
     "method_declaration",
 }
 
+# Non-code files indexed as text (decision #39): extension -> fence language
+# for the prompt. Docs and infra/config answer "how does it flow / deploy".
+TEXT_FILE_TYPES = {
+    ".md": "markdown",
+    ".yaml": "yaml",
+    ".yml": "yaml",
+    ".json": "json",
+    ".toml": "toml",
+    ".sh": "bash",
+}
+TEXT_FILE_PREFIXES = {"Dockerfile": "dockerfile"}  # matched on filename: Dockerfile, Dockerfile.prod
+TEXT_WINDOW_LINES = 100  # large non-Markdown text files are split into windows this long
+
 # Top-level import node types, listed in file-summary chunks (Section 6).
 IMPORT_NODE_TYPES = {
     "import_statement",        # python, javascript, typescript
@@ -97,7 +110,7 @@ DEFAULT_IGNORE_DIRS = {
     ".git", "node_modules", "venv", ".venv", "__pycache__",
     "dist", "build", ".next", "target", "vendor", ".idea", ".vscode",
 }
-DEFAULT_IGNORE_FILE_SUFFIXES = (".lock", ".min.js")
+DEFAULT_IGNORE_FILE_SUFFIXES = (".lock", ".min.js", "package-lock.json")
 
 # Name of the optional per-repo override file (Section 16.2)
 RAGXIGNORE_FILENAME = ".ragxignore"

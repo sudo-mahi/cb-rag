@@ -21,7 +21,7 @@ from pathlib import Path
 import chromadb
 from chromadb.errors import NotFoundError
 
-from server.chunker import chunk_file
+from server.chunker import chunk_file, text_lang
 from server.config import (
     CHROMA_DB_PATH,
     EMBEDDING_MODEL,
@@ -90,7 +90,7 @@ def _is_indexable(rel_path: str) -> bool:
         return False
     if rel_path.endswith(DEFAULT_IGNORE_FILE_SUFFIXES):
         return False
-    return Path(rel_path).suffix in LANG_MAP
+    return Path(rel_path).suffix in LANG_MAP or text_lang(Path(rel_path).name) is not None
 
 
 def list_files(root: Path) -> list[str]:

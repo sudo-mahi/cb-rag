@@ -729,7 +729,8 @@ Hardcoded, standard set — no novel design needed:
 
 ```
 .git, node_modules, venv, .venv, __pycache__, dist, build, .next,
-target (Rust/Java), vendor (Go), .idea, .vscode, *.lock, *.min.js
+target (Rust/Java), vendor (Go), .idea, .vscode, *.lock, *.min.js,
+package-lock.json
 ```
 
 **Update (decision #23):** in git repos the file list comes from
@@ -828,6 +829,7 @@ Chronological record of decisions made and why, for future-you to audit.
 | 36 | `/ask` memory/latency fixes: system prompt says cite `path:lines` and quote only a few lines (never whole functions); `ASK_NUM_CTX` 16384 → 8192; `fit_to_context` drops lowest-scoring chunks until the prompt fits (est. chars/3), before the `sources` event, which now carries `dropped` | Smaller answer model (3b); leave as is | A ~4K-token question took 41 min: 16K context + both models + desktop apps pushed a 16 GB Mac into swap, and the model pasted whole functions. Trimming is required once the window is smaller, since Ollama cuts the prompt's start |
 | 37 | Phase 2 `/complete` model: local `qwen2.5-coder:1.5b` via Ollama with fill-in-the-middle (prefix + suffix), replacing Claude Haiku in Section 12; measure latency before building on it. CLI built before Phase 2 starts | Reuse the 7B; cloud Claude Haiku 5.5 | Free and private like the rest; FIM context matters more for completions than size. 7B is ~2s+ per suggestion, too slow for ghost text (Section 12's 300-500ms budget) |
 | 38 | CLI: command `ragx` (`index`, `ask`, `q`, `repos`), a thin HTTP client in `cli/main.py`. Repo = `--repo`, else the deepest registered repo containing the current folder, else an error. Daemon down → error printing the exact start command. Installed with `uv tool install --editable . --python 3.14` | Names `cbrag` / `cb`; always `--repo`; CLI auto-starts the daemon | `ragx` was already used throughout the docs. Folder inference matches working inside a repo. Auto-start brings log files, a stop command, and stale-code daemons; a login service (launchd) is the deferred alternative. Python pinned because uv defaults to 3.15, which `onnxruntime` (via chromadb) has no wheels for |
+| 39 | Index docs and infra/config files as text: `.md`, `.yaml`/`.yml`, `.json`, `.toml`, `.sh`, `Dockerfile*` (`package-lock.json` ignored). ≤6K chars → one file-level chunk with the full text. Larger Markdown → one detail chunk per `#`-`###` section (headings inside code fences ignored) plus a file-level outline of the headings (`kind: summary`). Larger other files → 100-line windows (`path:L101-200`). Prompt fences use four backticks | Docs only; every text file; whole file capped at 6K | Real-repo test: "how does the dataflow / infrastructure work" was answered indirectly from a test file, because `docs/FLOW.md`, `template.yaml`, the state-machine JSON, README and Dockerfile were never indexed. Window ids depend on line numbers (against #9), so an insertion re-embeds later windows of that file; acceptable with free local embeddings |
 
 ---
 
@@ -884,3 +886,8 @@ Chronological record of decisions made and why, for future-you to audit.
   be built first. Phase 1 pushed on branch `phase-1`.
 - **2026-11-14** — CLI `ragx` (#38). **Phase 1 complete:** index, search,
   and streamed answers work end to end from any folder, fully local.
+- **2026-11-14** — User testing with broad questions ("what is this repo
+  about", architecture, dataflow, infrastructure) showed docs/infra files
+  weren't indexed; added text-file indexing (#39). Phase 2 paused for this
+  rework (Section 13). Still open: repo-level summary (Section 15) and
+  classifier routing for broad questions.

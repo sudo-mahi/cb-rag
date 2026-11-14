@@ -19,6 +19,7 @@ from pathlib import Path
 
 import requests
 
+from server.chunker import text_lang
 from server.config import (
     OLLAMA_URL,
     ASK_MODEL,
@@ -46,8 +47,10 @@ don't quote them as code."""
 
 
 def _code_block(text: str, filepath: str) -> str:
-    lang = LANG_MAP.get(Path(filepath).suffix, "")
-    return f"```{lang}\n{text}\n```"
+    # Four backticks: Markdown chunks contain their own ``` fences, which
+    # would close a three-backtick block early.
+    lang = LANG_MAP.get(Path(filepath).suffix) or text_lang(Path(filepath).name) or ""
+    return f"````{lang}\n{text}\n````"
 
 
 def build_context(results: list[dict]) -> str:
