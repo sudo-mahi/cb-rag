@@ -19,14 +19,23 @@ from pathlib import Path
 
 import requests
 
-from server.config import OLLAMA_URL, ASK_MODEL, ASK_NUM_CTX, ASK_MAX_TOKENS, LANG_MAP
+from server.config import (
+    OLLAMA_URL,
+    ASK_MODEL,
+    ASK_NUM_CTX,
+    ASK_MAX_TOKENS,
+    ASK_CHARS_PER_TOKEN,
+    LANG_MAP,
+)
 
 SYSTEM_PROMPT = """\
 You answer questions about the user's own codebase. The user message contains \
 context retrieved from the repository, followed by the question.
 
 Base the answer on that context. When you refer to code, cite it as \
-`path:start-end` using the line numbers in the headings. If the context \
+`path:start-end` using the line numbers in the headings, and explain it in \
+your own words. Quote at most a few key lines; never paste whole functions \
+or classes, since the user can open the cited lines. If the context \
 doesn't contain what's needed to answer, say what's missing instead of \
 guessing; general programming knowledge is fine for explaining what the \
 code does, but not for claiming what it contains.
@@ -73,6 +82,22 @@ def build_context(results: list[dict]) -> str:
                              + _code_block(c["text"], filepath))
 
     return "\n\n".join(parts)
+
+
+def fit_to_context(question: str, results: list[dict]) -> tuple[list[dict], int]:
+    """
+    Drop the lowest-scoring chunks until the prompt fits ASK_NUM_CTX with
+    room for the answer (decision #36). Never let Ollama truncate: it cuts
+    the START of the prompt, i.e. the instructions and the best results.
+    Returns (kept, dropped_count).
+    """
+    budget = ASK_NUM_CTX - ASK_MAX_TOKENS
+    fixed = (len(SYSTEM_PROMPT) + len(question)) // ASK_CHARS_PER_TOKEN + 100  # + formatting slack
+
+    kept = sorted(results, key=lambda r: -r["score"])
+    while kept and fixed + len(build_context(kept)) // ASK_CHARS_PER_TOKEN > budget:
+        kept.pop()
+    return kept, len(results) - len(kept)
 
 
 def stream_answer(question: str, results: list[dict]) -> Iterator[dict]:

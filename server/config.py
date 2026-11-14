@@ -44,9 +44,11 @@ EMBED_QUERY_INSTRUCTION = (
 # rate limits. Largest coding model that fits 16 GB RAM; swap here.
 OLLAMA_URL = "http://localhost:11434"
 ASK_MODEL = "qwen2.5-coder:7b"
-ASK_NUM_CTX = 16384     # Ollama's default window is small and silently drops the
-                        # START of an over-long prompt (system prompt + top results)
-ASK_MAX_TOKENS = 2048   # cap on the generated answer
+ASK_NUM_CTX = 8192      # Must be set: Ollama's default window is small and silently
+                        # drops the START of an over-long prompt. 16K pushed a 16 GB
+                        # Mac into swap (#36); prompts are ~4-5K tokens.
+ASK_MAX_TOKENS = 2048   # cap on the generated answer (reserved inside ASK_NUM_CTX)
+ASK_CHARS_PER_TOKEN = 3 # conservative estimate for code, used to fit chunks into the window
 COMPLETE_MODEL = "claude-haiku-5-5"  # Phase 2, not built yet; revisit with /complete
 
 # ── Chunking / language support (Section 2, Section 16.1 step 5) ──────────

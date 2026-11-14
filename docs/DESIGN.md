@@ -825,6 +825,8 @@ Chronological record of decisions made and why, for future-you to audit.
 | 33 | **Supersedes the model part of #30.** `/ask` runs on a local model via Ollama: `qwen2.5-coder:7b` (largest coding model that fits 16 GB RAM), `/api/chat` over plain `requests`, `num_ctx` 16384 set explicitly | Claude Sonnet 5.5 (paid; key returned 401); free cloud tiers (Gemini, Groq, OpenRouter) | Free, private (code never leaves the machine), no rate limits, works offline. Costs answer quality vs Sonnet and ~20s per answer (~27 tok/s on an M5). `num_ctx` must be explicit: Ollama silently drops the start of an over-long prompt. No provider abstraction yet (rule of three) |
 | 34 | **Supersedes #19 (batching) and the model in Section 4.** Embeddings run locally: `qwen3-embedding:0.6b` via Ollama `/api/embed` (1024 dims, normalized). Queries get Qwen3's `Instruct: ...\nQuery: ...` prefix, documents none. `num_ctx` 8192 with `truncate: true`; fixed batches of 32 (progress only). Voyage code and the `voyageai` package removed | `qwen3-embedding:4b`; config switch keeping Voyage | Removes the last paid/rate-limited dependency: the pipeline is fully local and offline. Measured on cb-rag: full re-embed of 51 chunks in 2.4s; file-level routing improved, exact-function ranking slightly weaker than voyage-code-3 (best match 3rd instead of 1st, still within top_k). 4b is a one-line upgrade if quality disappoints |
 | 35 | Each Chroma collection records `embedding_model` in its metadata. Indexing with a different model drops and rebuilds the collection; searching it raises `EmbeddingModelMismatch` ("re-index") | No check | Vectors from different models aren't comparable, and mixing them fails silently with meaningless scores |
+| 36 | `/ask` memory/latency fixes: system prompt says cite `path:lines` and quote only a few lines (never whole functions); `ASK_NUM_CTX` 16384 → 8192; `fit_to_context` drops lowest-scoring chunks until the prompt fits (est. chars/3), before the `sources` event, which now carries `dropped` | Smaller answer model (3b); leave as is | A ~4K-token question took 41 min: 16K context + both models + desktop apps pushed a 16 GB Mac into swap, and the model pasted whole functions. Trimming is required once the window is smaller, since Ollama cuts the prompt's start |
+| 37 | Phase 2 `/complete` model: local `qwen2.5-coder:1.5b` via Ollama with fill-in-the-middle (prefix + suffix), replacing Claude Haiku in Section 12; measure latency before building on it. CLI built before Phase 2 starts | Reuse the 7B; cloud Claude Haiku 5.5 | Free and private like the rest; FIM context matters more for completions than size. 7B is ~2s+ per suggestion, too slow for ghost text (Section 12's 300-500ms budget) |
 
 ---
 
@@ -875,3 +877,7 @@ Chronological record of decisions made and why, for future-you to audit.
   `qwen3-embedding:0.6b` via Ollama (#34, supersedes #19); collections
   record their embedding model (#35). `voyageai` removed. cb-rag
   re-indexed and search quality compared against the earlier Voyage runs.
+- **2026-11-14** — First real-repo test (sample-fanout-fanin: 61 files,
+  722 chunks, indexed in 78s) exposed a 41-minute `/ask` under memory
+  pressure; fixed with #36. Phase 2 completion model chosen (#37), CLI to
+  be built first. Phase 1 pushed on branch `phase-1`.

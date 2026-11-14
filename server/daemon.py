@@ -24,7 +24,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from server import registry
-from server.ask import stream_answer
+from server.ask import fit_to_context, stream_answer
 from server.indexer import index_repo
 from server.retrieval import search
 
@@ -142,9 +142,12 @@ def ask(req: AskRequest):
         # from here on are reported in-band as an error event.
         try:
             layers, results = search(req.repo, req.question, top_k=req.top_k)
+            # Trim before announcing sources, so they match what the model sees.
+            results, dropped = fit_to_context(req.question, results)
             yield {
                 "type": "sources",
                 "layers_searched": layers,
+                "dropped": dropped,
                 "sources": [
                     {k: r[k] for k in ("filepath", "start_line", "end_line", "layer", "kind", "score")}
                     for r in results
