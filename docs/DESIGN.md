@@ -951,3 +951,7 @@ Chronological record of decisions made and why, for future-you to audit.
 - **2026-11-15** — **Phase 2 started.** Benchmarked FIM with/without repo
   context (Section 12.1a table); `/complete` built (#43). Typing
   simulation: ~200 ms median with cached context. Next: VSCode extension.
+- **2026-11-15** — VSCode extension **put on hold** by the user before its
+  design was decided (open: plain JS symlinked vs TypeScript toolchain;
+  status bar vs built-in keys only). `/complete` is usable from the
+  terminal via `ragx complete FILE LINE [--typed N]`.
