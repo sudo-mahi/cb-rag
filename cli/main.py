@@ -61,6 +61,8 @@ def _resolve_repo(repo: str | None) -> str:
 
 
 def _loc(s: dict) -> str:
+    if s["layer"] == "repo":
+        return "repo summary (ragx summary)"
     return f"{s['filepath']}:{s['start_line']}-{s['end_line']}"
 
 
@@ -79,9 +81,14 @@ def index(path, name):
     if job["status"] == "already_running":
         click.echo("Already indexing this repo; following that job.")
 
+    announced_summary = False
     while True:
         s = _request("GET", "/index/status", params={"job_id": job["job_id"]}).json()
-        if s["batches_total"]:
+        if s.get("phase") == "summarizing":
+            if not announced_summary:
+                click.echo("\nWriting repo summary with the local model (about a minute)...", nl=False)
+                announced_summary = True
+        elif s["batches_total"]:
             click.echo(f"\rEmbedding: batch {s['batches_done']}/{s['batches_total']}", nl=False)
         if s["status"] != "running":
             break
@@ -97,6 +104,11 @@ def index(path, name):
     )
     for skipped in r["skipped"]:
         click.echo(click.style(f"  skipped {skipped}", fg="yellow"))
+    status = r.get("repo_summary", "")
+    if status == "generated":
+        click.echo("Repo summary written. Read it with `ragx summary`.")
+    elif status.startswith("failed"):
+        click.echo(click.style(f"Repo summary {status} (will retry next index)", fg="yellow"))
 
 
 @cli.command()
@@ -149,6 +161,19 @@ def q(query, repo, layers):
     click.echo(click.style(f"[{repo}] layers searched: {', '.join(data['layers_searched'])}", dim=True))
     for r in data["results"]:
         click.echo(f"  {r['score']:.3f}  {r['layer']:8}  {_loc(r)}")
+
+
+@cli.command()
+@click.option("--repo", help="Repo name (default: inferred from the current folder).")
+def summary(repo):
+    """Show the repo-level summary that every `ragx ask` starts from."""
+    repo = _resolve_repo(repo)
+    data = _request("GET", "/summary", params={"repo": repo}).json()
+    if not data["summary"]:
+        click.echo(f"No summary for {repo} yet. Run `ragx index` to write one.")
+        return
+    click.echo(click.style(f"[{repo}] auto-generated, {data['generated_at']}", dim=True))
+    click.echo(data["summary"])
 
 
 @cli.command()

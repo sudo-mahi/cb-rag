@@ -122,5 +122,12 @@ DEFAULT_PER_LAYER_K = {
     "repo": 1,
 }
 
-# ── Repo-summary refresh threshold (Section 15.3) ──────────────────────────
+# ── Repo-level summary (Section 15, decision #41) ──────────────────────────
 REPO_SUMMARY_REFRESH_THRESHOLD = 0.10  # regenerate if >10% of files changed
+REPO_SUMMARY_ID = "<repo>"             # its chunk id; '<' can't start a real file path
+# Input budget, in priority order, to fit the answer model's window with
+# room for the output: README first, so anything cut is the file list's tail.
+REPO_SUMMARY_README_CHARS = 6000
+REPO_SUMMARY_TREE_CHARS = 1500
+REPO_SUMMARY_INPUT_CHARS = 14000
+REPO_SUMMARY_MAX_TOKENS = 700

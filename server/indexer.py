@@ -9,13 +9,16 @@ Design decisions this file implements (see design doc):
   repo's .gitignore); non-git folders fall back to the default ignore lists
 - Section 9: per-chunk hash diffing — added/modified chunks are embedded,
   removed ones deleted, unchanged ones skipped
-- Function + file layers (chunker emits both); repo layer not yet built
+- Function + file layers from the chunker; repo layer = one LLM summary
+  per repo (decision #41), outside the per-chunk diff
 """
 
+import hashlib
 import os
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import chromadb
@@ -28,9 +31,15 @@ from server.config import (
     LANG_MAP,
     DEFAULT_IGNORE_DIRS,
     DEFAULT_IGNORE_FILE_SUFFIXES,
+    REPO_SUMMARY_ID,
+    REPO_SUMMARY_REFRESH_THRESHOLD,
 )
 from server.embeddings import embed_documents, ProgressFn
-from server import registry
+from server import registry, repo_summary
+
+
+def _hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 _chroma = chromadb.PersistentClient(path=str(CHROMA_DB_PATH))
 
@@ -118,7 +127,12 @@ def list_files(root: Path) -> list[str]:
     )
 
 
-def index_repo(path: str, repo_name: str | None = None, on_batch: ProgressFn | None = None) -> dict:
+def index_repo(
+    path: str,
+    repo_name: str | None = None,
+    on_batch: ProgressFn | None = None,
+    on_phase: Callable[[str], None] | None = None,
+) -> dict:
     root = Path(path).expanduser().resolve()
     repo_name = repo_name or root.name
     # Before touching Chroma: raises RepoNameConflict if this name belongs
@@ -140,19 +154,23 @@ def index_repo(path: str, repo_name: str | None = None, on_batch: ProgressFn | N
             c["filepath"] = rel
             current[c["chunk_id"]] = c
 
-    # 2. What's already in Chroma for this repo: id -> stored hash.
+    # 2. What's already in Chroma for this repo: id -> stored hash. The repo
+    # summary isn't a file chunk, so it stays out of the diff (or every run
+    # would delete it).
     existing = collection.get(include=["metadatas"])
-    stored_hash = {
-        id_: meta["content_hash"]
-        for id_, meta in zip(existing["ids"], existing["metadatas"])
+    stored = {
+        id_: meta for id_, meta in zip(existing["ids"], existing["metadatas"])
+        if id_ != REPO_SUMMARY_ID
     }
+    has_summary = REPO_SUMMARY_ID in existing["ids"]
 
     # 3. Diff (Section 9).
     to_embed = [
         c for id_, c in current.items()
-        if stored_hash.get(id_) != c["content_hash"]  # added or modified
+        if stored.get(id_, {}).get("content_hash") != c["content_hash"]  # added or modified
     ]
-    to_delete = [id_ for id_ in stored_hash if id_ not in current]
+    to_delete = [id_ for id_ in stored if id_ not in current]
+    changed_files = {c["filepath"] for c in to_embed} | {stored[id_]["filepath"] for id_ in to_delete}
 
     # 4. Embed only what changed, then write.
     if to_embed:
@@ -177,9 +195,38 @@ def index_repo(path: str, repo_name: str | None = None, on_batch: ProgressFn | N
     if to_delete:
         collection.delete(ids=to_delete)
 
+    # 5. Repo summary (Section 15.3): on first index, or once >10% of files
+    # have changed since it was written. A failure here doesn't fail the
+    # index — the chunks are already written; it retries next run.
+    changed_since = registry.get_repo(repo_name)["files_changed_since_summary"] + len(changed_files)
+    summary_status = "kept"
+    if not has_summary or (files and changed_since / len(files) > REPO_SUMMARY_REFRESH_THRESHOLD):
+        if on_phase:
+            on_phase("summarizing")
+        try:
+            file_chunks = {c["filepath"]: c for c in current.values() if c["level"] == "file"}
+            text = repo_summary.generate(repo_name, root, files, file_chunks)
+            collection.upsert(
+                ids=[REPO_SUMMARY_ID],
+                embeddings=embed_documents([text]),
+                documents=[text],
+                metadatas=[{
+                    "filepath": "", "level": "repo", "kind": "summary",
+                    "start_line": 0, "end_line": 0,
+                    "content_hash": _hash(text), "node_type": "repo",
+                }],
+            )
+            summary_status, changed_since = "generated", 0
+        except Exception as e:
+            summary_status = f"failed: {type(e).__name__}: {e}"
+
     # Chroma first, registry after (Section 8): a crash in between just
     # leaves last_indexed_at stale, never claiming work that didn't happen.
-    registry.record_index(repo_name, file_count=len(files), chunk_count=len(current))
+    registry.record_index(
+        repo_name, file_count=len(files), chunk_count=len(current),
+        files_changed_since_summary=changed_since,
+        summary_regenerated=summary_status == "generated",
+    )
 
     return {
         "repo": repo_name,
@@ -190,6 +237,7 @@ def index_repo(path: str, repo_name: str | None = None, on_batch: ProgressFn | N
         "deleted": len(to_delete),
         "unchanged": len(current) - len(to_embed),
         "skipped": skipped,
+        "repo_summary": summary_status,
     }
 
 

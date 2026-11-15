@@ -1,8 +1,9 @@
 """
-FastAPI daemon: holds Chroma + API clients so the CLI stays a thin HTTP client.
+FastAPI daemon: holds Chroma and talks to Ollama, so the CLI stays a thin HTTP client.
 
 Design decisions this file implements (see design doc):
-- Section 14: /health, /repos, /index, /index/status, /query, /ask
+- Section 14: /health, /repos, /index, /index/status, /query, /ask, plus
+  /summary (decision #41)
 - Decision #28: a second /index for a repo that's already indexing gets
   the running job back, so two jobs never diff one collection at once
 - Decision #29: /index/status reports embedding batch progress
@@ -26,7 +27,7 @@ from pydantic import BaseModel
 from server import registry
 from server.ask import fit_to_context, stream_answer
 from server.indexer import index_repo
-from server.retrieval import search
+from server.retrieval import get_repo_summary, search
 
 app = FastAPI(title="cb-rag")
 
@@ -69,8 +70,11 @@ def _run_index_job(job: dict, path: str) -> None:
     def on_batch(done: int, total: int):
         job["batches_done"], job["batches_total"] = done, total
 
+    def on_phase(phase: str):
+        job["phase"] = phase
+
     try:
-        job["result"] = index_repo(path, job["repo"], on_batch=on_batch)
+        job["result"] = index_repo(path, job["repo"], on_batch=on_batch, on_phase=on_phase)
         job["status"] = "done"
     except Exception as e:
         job["error"] = f"{type(e).__name__}: {e}"
@@ -99,6 +103,7 @@ def start_index(req: IndexRequest):
             "job_id": f"idx_{uuid.uuid4().hex[:6]}",
             "repo": repo_name,
             "status": "running",
+            "phase": "indexing",    # -> "summarizing" while the repo summary is written
             "batches_done": 0,
             "batches_total": None,  # known once chunking + diffing finish
             "result": None,
@@ -126,6 +131,16 @@ def query(req: QueryRequest):
     return {"layers_searched": layers, "results": results}
 
 
+@app.get("/summary")
+def summary(repo: str):
+    """The stored repo-level summary, so it can be read and checked (#41)."""
+    info = registry.get_repo(repo)
+    if info is None:
+        raise HTTPException(404, f"Unknown repo: {repo}. Index it first.")
+    s = get_repo_summary(repo)
+    return {"repo": repo, "summary": s["text"] if s else None, "generated_at": info["summary_generated_at"]}
+
+
 @app.post("/ask")
 def ask(req: AskRequest):
     """
@@ -142,8 +157,13 @@ def ask(req: AskRequest):
         # from here on are reported in-band as an error event.
         try:
             layers, results = search(req.repo, req.question, top_k=req.top_k)
+            # The repo summary is always included at the top (#41) — fetched
+            # by id, so drop it from search results to avoid sending it twice.
+            results = [r for r in results if r["layer"] != "repo"]
+            pinned = [s] if (s := get_repo_summary(req.repo)) else []
             # Trim before announcing sources, so they match what the model sees.
-            results, dropped = fit_to_context(req.question, results)
+            results, dropped = fit_to_context(req.question, results, pinned)
+            results = pinned + results
             yield {
                 "type": "sources",
                 "layers_searched": layers,

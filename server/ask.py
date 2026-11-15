@@ -1,5 +1,5 @@
 """
-/ask generation: turn retrieved chunks into a prompt and stream Claude's answer.
+/ask generation: turn retrieved chunks into a prompt and stream the local model's answer.
 
 Design decisions this file implements (see design doc):
 - Section 11.1: broad -> narrow (repo context, then per-file summary, then
@@ -93,18 +93,19 @@ def build_context(results: list[dict]) -> str:
     return "\n\n".join(parts)
 
 
-def fit_to_context(question: str, results: list[dict]) -> tuple[list[dict], int]:
+def fit_to_context(question: str, results: list[dict], pinned: list[dict] = ()) -> tuple[list[dict], int]:
     """
     Drop the lowest-scoring chunks until the prompt fits ASK_NUM_CTX with
     room for the answer (decision #36). Never let Ollama truncate: it cuts
     the START of the prompt, i.e. the instructions and the best results.
-    Returns (kept, dropped_count).
+    `pinned` chunks (the repo summary, #41) count toward the budget but are
+    never dropped. Returns (kept results, dropped_count); pinned not included.
     """
     budget = ASK_NUM_CTX - ASK_MAX_TOKENS
     fixed = (len(SYSTEM_PROMPT) + len(question)) // ASK_CHARS_PER_TOKEN + 100  # + formatting slack
 
     kept = sorted(results, key=lambda r: -r["score"])
-    while kept and fixed + len(build_context(kept)) // ASK_CHARS_PER_TOKEN > budget:
+    while kept and fixed + len(build_context([*pinned, *kept])) // ASK_CHARS_PER_TOKEN > budget:
         kept.pop()
     return kept, len(results) - len(kept)
 

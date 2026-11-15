@@ -11,7 +11,7 @@ Design decisions this file implements (see design doc):
 
 import re
 
-from server.config import DEFAULT_PER_LAYER_K, LANG_MAP
+from server.config import DEFAULT_PER_LAYER_K, LANG_MAP, REPO_SUMMARY_ID
 from server.embeddings import embed_query
 from server.indexer import get_collection
 
@@ -48,6 +48,20 @@ def classify(question: str) -> list[str]:
     if not layers:
         layers = {"function", "file"}
     return [layer for layer in LAYER_ORDER if layer in layers]
+
+
+def get_repo_summary(repo_name: str) -> dict | None:
+    """
+    The repo-level summary as a result dict (decision #41). Fetched by id,
+    not by similarity: /ask always includes it.
+    """
+    r = get_collection(repo_name).get(ids=[REPO_SUMMARY_ID], include=["documents"])
+    if not r["ids"]:
+        return None
+    return {
+        "chunk_id": REPO_SUMMARY_ID, "text": r["documents"][0], "filepath": "",
+        "start_line": 0, "end_line": 0, "layer": "repo", "kind": "summary", "score": 1.0,
+    }
 
 
 def search(
