@@ -164,6 +164,35 @@ def q(query, repo, layers):
 
 
 @cli.command()
+@click.argument("file", type=click.Path(exists=True, dir_okay=False))
+@click.argument("line", type=int)
+@click.option("--typed", default=0, show_default=True,
+              help="How many characters of the line to keep, as if you'd typed them.")
+def complete(file, line, typed):
+    """Try inline completion: hide LINE of FILE (1-based) and show the suggestion."""
+    path = Path(file).resolve()
+    lines = path.read_text(errors="ignore").splitlines(keepends=True)
+    if not 1 <= line <= len(lines):
+        raise click.ClickException(f"{file} has {len(lines)} lines; LINE must be 1-{len(lines)}.")
+    target = lines[line - 1]
+    indent, body = target[: len(target) - len(target.lstrip())], target.strip()
+    kept = body[:typed]
+
+    r = _request("POST", "/complete", json={
+        "filepath": str(path),
+        "prefix": "".join(lines[: line - 1]) + indent + kept,
+        "suffix": "\n" + "".join(lines[line:]),
+        "cursor_line": line - 1,
+    }).json()
+    suggestion = kept + r["completion"]
+    click.echo(f"real line : {body}")
+    click.echo(f"you typed : {kept}")
+    click.echo(f"suggestion: {kept}" + click.style(r["completion"], fg="cyan")
+               + ("   " + click.style("✓ exact", fg="green") if suggestion == body else ""))
+    click.echo(click.style(f"context {r['context']}, {r['ms']['total']} ms", dim=True))
+
+
+@cli.command()
 @click.option("--repo", help="Repo name (default: inferred from the current folder).")
 def summary(repo):
     """Show the repo-level summary that every `ragx ask` starts from."""

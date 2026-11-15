@@ -138,6 +138,10 @@ def complete(filepath: str, prefix: str, suffix: str, cursor_line: int) -> dict:
         raise RuntimeError(f"Ollama isn't running at {OLLAMA_URL}. Start it: brew services start ollama")
     resp.raise_for_status()
     completion = resp.json()["response"].rstrip()
+    # Cursor after only indentation: the model sometimes re-indents, which
+    # would double the indentation once inserted at the cursor.
+    if not prefix_lines[-1].strip():
+        completion = completion.lstrip()
     t2 = time.time()
 
     return {
