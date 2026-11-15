@@ -445,6 +445,30 @@ No classification step in this path, deliberately — it would eat into the
 typing pause, and there's nothing to classify since the scope is already
 known.
 
+### 12.1a As built and measured (decisions #37, #43)
+
+Model: local `qwen2.5-coder:1.5b` via Ollama, raw fill-in-the-middle in
+Qwen's repo-level format (`<|repo_name|>`, `<|file_sep|>path` entries,
+then `<|fim_prefix|>…<|fim_suffix|>…<|fim_middle|>`). Context = the current
+file's outline chunk + top-3 similar functions from **other** files (query:
+the 15 lines before the cursor, embedded as a document since it's code).
+
+Benchmark, 60 hidden lines in sample-fanout-fanin (line mode):
+
+| Variant | Exact | Close (≥0.8) | Gen median | Gen p90 |
+|---|---|---|---|---|
+| No context | 14/60 | 23/60 | 280 ms | 442 ms |
+| **Repo format** | **20/60** | 27/60 | 474 ms | 890 ms |
+| Context as `#` comments | 20/60 | 28/60 | 534 ms | 979 ms |
+| Outline only | 15/60 | 26/60 | 427 ms | 589 ms |
+
+The gain comes from similar code in other files, not the outline. Context
+costs ~3x prompt tokens, but Ollama reuses the KV cache for an identical
+prompt start, so the context is cached per (file, 25-line region) and the
+in-file prefix starts at a fixed line per region. Typing simulation:
+cached-context requests median **201 ms**, max 420 ms; a new region
+(fresh retrieval) 0.4-1.1 s.
+
 ### 12.2 Trigger logic — debounce + trigger characters, combined
 
 Neither mechanism alone is sufficient:
@@ -852,6 +876,7 @@ Chronological record of decisions made and why, for future-you to audit.
 | 40 | Guard against invented quotes: (1) system prompt — quote only text verbatim in the context, never reconstruct a file that isn't shown, say when a needed file is missing; (2) after the answer, every line ≥6 chars inside its code fences is looked up (whitespace-insensitive) in the context the model was given; any misses → a `warning` event before `done`, printed in yellow by `ragx` | Prompt only; bigger/cloud model | The 7B model wrote JSON "from `fanout.asl.json`" (Lambda ARNs, a `HandleError` state) that the file doesn't contain and that wasn't even in its context. The model can only quote truthfully from the context we built, so a string check catches fake quotes deterministically whatever the model does. Doesn't check prose claims |
 | 41 | Repo-level summary (Section 15) built: generated during `ragx index` by the local answer model, on first index or when `files_changed_since_summary / files > 10%` (counter in the `repos` table, plus `summary_generated_at`; columns added to existing DBs on connect). Inputs within a 14K-char budget, in priority order: manifest description, README (≤6K chars), folder tree (3 levels, ≤1.5K), one line per file (path + first line of its file chunk). Stored as chunk `<repo>` (`level: repo`, `kind: summary`), excluded from the per-chunk diff. A failure doesn't fail the index (retried next run). `GET /summary` + `ragx summary` show it | Separate `ragx summarize`; lazy on first ask; README+tree only; per-folder multi-stage | Broad questions ("what is this repo about") have no single chunk that answers them. One local call takes ~20s, only on first index / >10% change. The file list makes it work without a README. Its errors spread into every answer, so it must be readable |
 | 42 | **Changes Section 10.1's "skip `repo` by default".** `/ask` always includes the repo summary, fetched by id, at the top of the prompt; `fit_to_context` treats it as pinned (counted, never dropped); repo-layer search hits are removed to avoid sending it twice | Include only when the classifier routes to `repo` (expanded vocabulary) | One small chunk (~500 tokens) gives every answer project framing, and broad questions work however they're phrased; the user's misspelled "archeitecture" and words like "infrastructure"/"dataflow" never matched the classifier |
+| 43 | `/complete` (Section 12.1a): Qwen repo-level FIM format with context = current file's outline + top-3 similar functions from other files (current file excluded: its live text is in the prompt and indexing it would leak); context cached per (file, `cursor_line // 25`), in-file prefix starts at a fixed line per region (40 lines above it) so the prompt start is byte-identical while typing; single-line suggestions (stop at newline, 48 tokens); `keep_alive` 30m; repo inferred from the file path, files outside repos get context-free FIM | No context; context as comments; re-retrieve per keystroke; per-enclosing-function cache; multi-line blocks | Measured: context raises exact matches 14→20 of 60; comments match it but are slower. Per-keystroke retrieval would change the prompt start and defeat Ollama's prompt cache (0.3s warm vs 0.5-0.9s cold). Multi-line had a 7.5s runaway in step 1 |
 
 ---
 
@@ -923,3 +948,6 @@ Chronological record of decisions made and why, for future-you to audit.
   instead of a list of whichever services matched. Refresh rule verified
   (first index, >10% regenerates, <10% keeps). Lesson: summary errors and
   stale code comments propagate into every broad answer.
+- **2026-11-15** — **Phase 2 started.** Benchmarked FIM with/without repo
+  context (Section 12.1a table); `/complete` built (#43). Typing
+  simulation: ~200 ms median with cached context. Next: VSCode extension.

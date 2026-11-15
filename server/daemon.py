@@ -3,7 +3,7 @@ FastAPI daemon: holds Chroma and talks to Ollama, so the CLI stays a thin HTTP c
 
 Design decisions this file implements (see design doc):
 - Section 14: /health, /repos, /index, /index/status, /query, /ask, plus
-  /summary (decision #41)
+  /summary (decision #41) and /complete (Phase 2, decision #43)
 - Decision #28: a second /index for a repo that's already indexing gets
   the running job back, so two jobs never diff one collection at once
 - Decision #29: /index/status reports embedding batch progress
@@ -26,6 +26,7 @@ from pydantic import BaseModel
 
 from server import registry
 from server.ask import fit_to_context, stream_answer
+from server.complete import complete
 from server.indexer import index_repo
 from server.retrieval import get_repo_summary, search
 
@@ -54,6 +55,13 @@ class AskRequest(BaseModel):
     repo: str
     question: str
     top_k: dict[Layer, int] | None = None
+
+
+class CompleteRequest(BaseModel):
+    filepath: str        # absolute path of the file being edited
+    prefix: str          # whole document before the cursor
+    suffix: str          # whole document after the cursor
+    cursor_line: int     # 0-based
 
 
 @app.get("/health")
@@ -129,6 +137,16 @@ def query(req: QueryRequest):
         raise HTTPException(404, f"Unknown repo: {req.repo}. Index it first.")
     layers, results = search(req.repo, req.query, req.layers, req.top_k)
     return {"layers_searched": layers, "results": results}
+
+
+@app.post("/complete")
+def complete_endpoint(req: CompleteRequest):
+    """
+    Single-line inline suggestion (Section 12, decision #43). The repo is
+    inferred from the file's path; files outside indexed repos still get a
+    suggestion, just without repo context.
+    """
+    return complete(req.filepath, req.prefix, req.suffix, req.cursor_line)
 
 
 @app.get("/summary")

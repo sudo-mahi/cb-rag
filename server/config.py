@@ -49,7 +49,19 @@ ASK_NUM_CTX = 8192      # Must be set: Ollama's default window is small and sile
                         # Mac into swap (#36); prompts are ~4-5K tokens.
 ASK_MAX_TOKENS = 2048   # cap on the generated answer (reserved inside ASK_NUM_CTX)
 ASK_CHARS_PER_TOKEN = 3 # conservative estimate for code, used to fit chunks into the window
-COMPLETE_MODEL = "claude-haiku-5-5"  # Phase 2, not built yet; revisit with /complete
+# /complete (Phase 2, decisions #37, #43): local fill-in-the-middle model,
+# Qwen repo-level prompt format, context cached per 25-line region so the
+# prompt start stays byte-identical and Ollama's prompt cache reuses it.
+COMPLETE_MODEL = "qwen2.5-coder:1.5b"
+COMPLETE_NUM_CTX = 4096
+COMPLETE_MAX_TOKENS = 48         # single-line suggestions (stop at newline)
+COMPLETE_KEEP_ALIVE = "30m"      # stay loaded through typing pauses (~1 GB)
+COMPLETE_REGION_LINES = 25       # context re-retrieved when the cursor changes region
+COMPLETE_PREFIX_LINES = 40       # code before the region start included in the prompt
+COMPLETE_SUFFIX_CHARS = 800
+COMPLETE_SNIPPET_CHARS = 1500
+COMPLETE_K = 3                   # similar functions from other files
+COMPLETE_CACHE_SIZE = 64         # cached (file, region) contexts
 
 # ── Chunking / language support (Section 2, Section 16.1 step 5) ──────────
 # Maps file extension -> tree-sitter-language-pack language identifier
