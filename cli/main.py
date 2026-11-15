@@ -107,7 +107,7 @@ def ask(question, repo):
     repo = _resolve_repo(repo)
     resp = _request("POST", "/ask", json={"repo": repo, "question": question}, stream=True)
 
-    sources = []
+    sources, warnings = [], []
     click.echo(click.style(f"[{repo}] thinking...", dim=True), nl=False)
     started = False
     for line in resp.iter_lines():
@@ -121,11 +121,15 @@ def ask(question, repo):
                 click.echo("\r\033[K", nl=False)  # clear the "thinking..." line
                 started = True
             click.echo(event["text"], nl=False)
+        elif event["type"] == "warning":
+            warnings.append(event["text"])
         elif event["type"] == "error":
             click.echo()
             raise click.ClickException(event["error"])
     click.echo("\n")
 
+    for w in warnings:
+        click.echo(click.style(f"⚠ {w}", fg="yellow") + "\n")
     if sources:
         click.echo(click.style("Sources:", bold=True))
         for s in sources:

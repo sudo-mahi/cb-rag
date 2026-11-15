@@ -11,9 +11,12 @@ Design decisions this file implements (see design doc):
 - Decision #31: streamed; this module yields events, the daemon sends them
   as NDJSON
 - Decision #33: answered by a local model through Ollama's /api/chat
+- Decision #40: quoted code in the answer is checked against the context;
+  lines not found there produce a warning event
 """
 
 import json
+import re
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -36,7 +39,10 @@ context retrieved from the repository, followed by the question.
 Base the answer on that context. When you refer to code, cite it as \
 `path:start-end` using the line numbers in the headings, and explain it in \
 your own words. Quote at most a few key lines; never paste whole functions \
-or classes, since the user can open the cited lines. If the context \
+or classes, since the user can open the cited lines. Only quote text that \
+appears verbatim in the context above. Never write out or reconstruct the \
+contents of a file that isn't shown; if a file you need isn't in the \
+context, say that it isn't. If the context \
 doesn't contain what's needed to answer, say what's missing instead of \
 guessing; general programming knowledge is fine for explaining what the \
 code does, but not for claiming what it contains.
@@ -103,14 +109,47 @@ def fit_to_context(question: str, results: list[dict]) -> tuple[list[dict], int]
     return kept, len(results) - len(kept)
 
 
+_FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
+_MIN_CHECKED_LEN = 6  # shorter lines ("}", "end", "pass") match anywhere; not evidence
+
+
+def _normalize(s: str) -> str:
+    return " ".join(s.split())
+
+
+def unverified_quote_lines(answer: str, context: str) -> tuple[int, int]:
+    """
+    Decision #40: lines inside the answer's fenced code blocks that don't
+    appear (whitespace-insensitive) anywhere in the context the model was
+    given. The model can only quote truthfully from that context, so those
+    lines were invented or rewritten. Returns (unverified, checked).
+    """
+    haystack = _normalize(context)
+    in_block, checked, unverified = False, 0, 0
+    for line in answer.splitlines():
+        if _FENCE.match(line):
+            in_block = not in_block
+            continue
+        norm = _normalize(line)
+        if in_block and len(norm) >= _MIN_CHECKED_LEN:
+            checked += 1
+            if norm not in haystack:
+                unverified += 1
+    return unverified, checked
+
+
 def stream_answer(question: str, results: list[dict]) -> Iterator[dict]:
-    """Yields {"type": "text", "text": ...} events, then {"type": "done", ...}."""
+    """
+    Yields {"type": "text", "text": ...} events, then optionally a
+    {"type": "warning", ...} (unverified quotes), then {"type": "done", ...}.
+    """
     if not results:
         yield {"type": "text", "text": "Nothing in the index matched this question."}
         yield {"type": "done", "stop_reason": "no_context"}
         return
 
-    user_message = f"{build_context(results)}\n\n---\n\nQuestion: {question}"
+    context = build_context(results)
+    user_message = f"{context}\n\n---\n\nQuestion: {question}"
 
     try:
         resp = requests.post(
@@ -133,6 +172,7 @@ def stream_answer(question: str, results: list[dict]) -> Iterator[dict]:
 
     # Ollama streams NDJSON: {"message": {"content": "..."}, "done": false} ...
     # ending with a {"done": true, "done_reason": ...} line.
+    answer = []
     for line in resp.iter_lines():
         if not line:
             continue
@@ -140,7 +180,15 @@ def stream_answer(question: str, results: list[dict]) -> Iterator[dict]:
         if "error" in chunk:
             raise RuntimeError(f"Ollama: {chunk['error']}")
         if text := chunk.get("message", {}).get("content"):
+            answer.append(text)
             yield {"type": "text", "text": text}
         if chunk.get("done"):
+            unverified, checked = unverified_quote_lines("".join(answer), context)
+            if unverified:
+                yield {
+                    "type": "warning",
+                    "text": f"{unverified} of {checked} quoted code lines don't appear in the "
+                            "sources; that code may be invented or rewritten. Check the cited files.",
+                }
             yield {"type": "done", "stop_reason": chunk.get("done_reason")}
             return

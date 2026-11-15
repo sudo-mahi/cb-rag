@@ -547,10 +547,11 @@ Response:
 **Update (decisions #30-#32) — as built, the response streams as NDJSON:**
 
 ```
-{"type": "sources", "layers_searched": ["file", "function"],
+{"type": "sources", "layers_searched": ["file", "function"], "dropped": 0,
  "sources": [{"filepath": "...", "start_line": 45, "end_line": 60, "layer": "function", "kind": "code", "score": 0.61}]}
 {"type": "text", "text": "The refresh flow..."}          // repeated
-{"type": "done", "stop_reason": "end_turn"}              // or {"type": "error", "error": "..."}
+{"type": "warning", "text": "3 of 7 quoted code lines..."}  // optional, decision #40
+{"type": "done", "stop_reason": "stop"}                  // or {"type": "error", "error": "..."}
 ```
 
 ### 14.2 `POST /query` — raw search, no LLM synthesis
@@ -830,6 +831,7 @@ Chronological record of decisions made and why, for future-you to audit.
 | 37 | Phase 2 `/complete` model: local `qwen2.5-coder:1.5b` via Ollama with fill-in-the-middle (prefix + suffix), replacing Claude Haiku in Section 12; measure latency before building on it. CLI built before Phase 2 starts | Reuse the 7B; cloud Claude Haiku 5.5 | Free and private like the rest; FIM context matters more for completions than size. 7B is ~2s+ per suggestion, too slow for ghost text (Section 12's 300-500ms budget) |
 | 38 | CLI: command `ragx` (`index`, `ask`, `q`, `repos`), a thin HTTP client in `cli/main.py`. Repo = `--repo`, else the deepest registered repo containing the current folder, else an error. Daemon down → error printing the exact start command. Installed with `uv tool install --editable . --python 3.14` | Names `cbrag` / `cb`; always `--repo`; CLI auto-starts the daemon | `ragx` was already used throughout the docs. Folder inference matches working inside a repo. Auto-start brings log files, a stop command, and stale-code daemons; a login service (launchd) is the deferred alternative. Python pinned because uv defaults to 3.15, which `onnxruntime` (via chromadb) has no wheels for |
 | 39 | Index docs and infra/config files as text: `.md`, `.yaml`/`.yml`, `.json`, `.toml`, `.sh`, `Dockerfile*` (`package-lock.json` ignored). ≤6K chars → one file-level chunk with the full text. Larger Markdown → one detail chunk per `#`-`###` section (headings inside code fences ignored) plus a file-level outline of the headings (`kind: summary`). Larger other files → 100-line windows (`path:L101-200`). Prompt fences use four backticks | Docs only; every text file; whole file capped at 6K | Real-repo test: "how does the dataflow / infrastructure work" was answered indirectly from a test file, because `docs/FLOW.md`, `template.yaml`, the state-machine JSON, README and Dockerfile were never indexed. Window ids depend on line numbers (against #9), so an insertion re-embeds later windows of that file; acceptable with free local embeddings |
+| 40 | Guard against invented quotes: (1) system prompt — quote only text verbatim in the context, never reconstruct a file that isn't shown, say when a needed file is missing; (2) after the answer, every line ≥6 chars inside its code fences is looked up (whitespace-insensitive) in the context the model was given; any misses → a `warning` event before `done`, printed in yellow by `ragx` | Prompt only; bigger/cloud model | The 7B model wrote JSON "from `fanout.asl.json`" (Lambda ARNs, a `HandleError` state) that the file doesn't contain and that wasn't even in its context. The model can only quote truthfully from the context we built, so a string check catches fake quotes deterministically whatever the model does. Doesn't check prose claims |
 
 ---
 
@@ -891,3 +893,7 @@ Chronological record of decisions made and why, for future-you to audit.
   weren't indexed; added text-file indexing (#39). Phase 2 paused for this
   rework (Section 13). Still open: repo-level summary (Section 15) and
   classifier routing for broad questions.
+- **2026-11-15** — Re-test after #39: infrastructure answer now mostly
+  correct; dataflow answer invented state-machine JSON it was never shown.
+  Added quote guard (#40). Same question afterwards: no invented code,
+  correct Fargate/`ItemsPath` details, 28s.
